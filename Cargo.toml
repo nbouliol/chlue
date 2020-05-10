@@ -1,0 +1,9 @@
+[package]
+name = "chlue"
+version = "0.1.0"
+authors = ["Nicolas Bouliol <cheuveux@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+huelib = "0.6.0"
+clap = "2.33.0"
