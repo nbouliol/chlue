@@ -3,7 +3,13 @@ use clap::{App, Arg};
 
 use huelib::resource::{light, scene, Alert, Modifier, ModifierType};
 use huelib::{bridge, Bridge};
-use std::io::{self, Read};
+use std::io::{self, stdin, stdout, Read, Write};
+use termion::{
+  event::Key,
+  input::TermRead,
+  raw::IntoRawMode,
+  {clear, color, cursor, style},
+};
 
 fn main() {
   // Discover bridges in the local network and save the first IP address as `bridge_ip`.
@@ -90,12 +96,12 @@ fn main() {
           // let response = bridge.set_light_state("1", &light_modifier).unwrap();
           // println!("{:?}", response);
 
-          let mut modifier = scene::Modifier::new(); //.on(true);
-                                                     // modifier.
-          println!("{:?}", modifier);
-          bridge
-            .set_scene(scene.id.clone(), &modifier)
-            .expect("failed to change state");
+          // let mut modifier = scene::Modifier::new(); //.on(true);
+          //                                            // modifier.
+          // println!("{:?}", modifier);
+          // bridge
+          //   .set_scene(scene.id.clone(), &modifier)
+          //   .expect("failed to change state");
         } else {
           println!("No scend found with id : {}", buffer);
         }
@@ -139,6 +145,67 @@ fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
       println!("\r > No scene detected for this room");
     }
   }
+}
+
+fn select(lines: Vec<String>) {
+  let stdin = stdin();
+  let mut stdout = stdout().into_raw_mode().unwrap();
+  write!(
+    stdout,
+    "{}{}[?] {}{}\n",
+    cursor::Hide,
+    color::Fg(color::Green),
+    style::Reset,
+    "Choose 1"
+  )
+  .unwrap();
+
+  for _ in 0..lines.len() {
+    write!(stdout, "\n").unwrap();
+  }
+
+  let mut cur: usize = 0;
+
+  let mut input = stdin.keys();
+
+  loop {
+    print!("{}", cursor::Up(lines.len() as u16));
+
+    for (i, s) in lines.iter().enumerate() {
+      write!(stdout, "\n\r{}", clear::CurrentLine).unwrap();
+
+      if cur == i {
+        write!(stdout, "{}  > {}{}", style::Bold, s, style::Reset).unwrap();
+      } else {
+        write!(stdout, "    {}", s).unwrap();
+      }
+    }
+
+    stdout.lock().flush().unwrap();
+
+    let next = input.next().ok_or_else(|| 0).unwrap();
+
+    match next.unwrap() {
+      Key::Char('\n') => {
+        // Enter
+        break;
+      }
+      Key::Up if cur != 0 => {
+        cur -= 1;
+      }
+      Key::Down if cur != lines.len() - 1 => {
+        cur += 1;
+      }
+      Key::Ctrl('c') => {
+        write!(stdout, "\n\r{}", cursor::Show).unwrap();
+        // return Err(Error::UserAborted);
+      }
+      _ => {
+        // pass
+      }
+    }
+  }
+  write!(stdout, "\n\r{}", cursor::Show);
 }
 
 #[derive(Debug, Clone)]
