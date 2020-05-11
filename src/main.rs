@@ -10,10 +10,13 @@ use termion::{
   raw::IntoRawMode,
   {clear, color, cursor, style},
 };
+use thiserror::Error;
 
-fn main() {
+type Result<T> = std::result::Result<T, ChlueError>;
+
+fn main() -> Result<()> {
   // Discover bridges in the local network and save the first IP address as `bridge_ip`.
-  let bridge_ip = bridge::discover().unwrap().pop().unwrap();
+  let bridge_ip = bridge::discover()?.pop().unwrap();
   let mut stdin = io::stdin().bytes();
   // Register a new user.
   // let user = bridge::register_user(bridge_ip, "chlue", false).unwrap();
@@ -24,9 +27,9 @@ fn main() {
   };
   let bridge = Bridge::new(bridge_ip, &user.name);
 
-  let scenes = bridge.get_all_scenes().unwrap();
+  let scenes = bridge.get_all_scenes()?;
 
-  let group_scenes = get_group_scene_for_user(&bridge, &scenes);
+  let group_scenes = get_group_scene_for_user(&bridge, &scenes)?;
 
   let matches = App::new("My Super Program")
     .version("1.0")
@@ -47,30 +50,33 @@ fn main() {
   if matches.is_present("list") {
     list_group_scenes(&group_scenes);
   }
-  let mut input = String::new();
+
   if matches.is_present("turn") {
     let mut lines: Vec<String> = group_scenes.iter().map(|x| x.group.name.clone()).collect();
     lines.sort();
-    let selected_group = select_group("Choose room", &group_scenes);
+    let selected_group = select("Choose room", &group_scenes, |x| x.group.name.to_owned())?;
     println!("SELECTED : {} ", selected_group.group.name);
 
-    let select_scene = select_scene(
+    let select_scene = select(
       &format!("Choose scene in {}", selected_group.group.name),
       &selected_group.scenes.as_ref().unwrap(),
-    );
+      |x| x.name.to_string(),
+    )?;
     println!(
       "selected scene : {} -> {}",
       select_scene.name, select_scene.id
     );
   }
+
+  Ok(())
 }
 
 fn get_group_scene_for_user<'a>(
   bridge: &Bridge,
   scenes: &'a Vec<huelib::resource::scene::Scene>,
-) -> Vec<GroupScene<'a>> {
+) -> Result<Vec<GroupScene<'a>>> {
   let mut group_scenes: Vec<GroupScene> = Vec::new();
-  let groups = bridge.get_all_groups().unwrap();
+  let groups = bridge.get_all_groups()?;
 
   for group in groups {
     let mut group_scene = GroupScene {
@@ -82,7 +88,7 @@ fn get_group_scene_for_user<'a>(
     group_scenes.push(group_scene);
   }
 
-  group_scenes
+  Ok(group_scenes)
 }
 
 fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
@@ -98,10 +104,13 @@ fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
   }
 }
 
-// macro ?!
-fn select_group<'a>(prompt: &str, lines: &'a Vec<GroupScene<'a>>) -> &'a GroupScene<'a> {
+fn select<'a, T, F>(prompt: &str, lines: &'a Vec<T>, closur: F) -> Result<&'a T>
+where
+  F: Fn(&T) -> String,
+{
   let stdin = stdin();
-  let mut stdout = stdout().into_raw_mode().unwrap();
+  let mut stdout = stdout().into_raw_mode()?;
+
   write!(
     stdout,
     "{}{}[?] {}{}\n",
@@ -109,11 +118,10 @@ fn select_group<'a>(prompt: &str, lines: &'a Vec<GroupScene<'a>>) -> &'a GroupSc
     color::Fg(color::Green),
     style::Reset,
     prompt
-  )
-  .unwrap();
+  )?;
 
   for _ in 0..lines.len() {
-    write!(stdout, "\n").unwrap();
+    write!(stdout, "\n")?;
   }
 
   let mut cur: usize = 0;
@@ -124,23 +132,16 @@ fn select_group<'a>(prompt: &str, lines: &'a Vec<GroupScene<'a>>) -> &'a GroupSc
     print!("{}", cursor::Up(lines.len() as u16));
 
     for (i, s) in lines.iter().enumerate() {
-      write!(stdout, "\n\r{}", clear::CurrentLine).unwrap();
+      write!(stdout, "\n\r{}", clear::CurrentLine)?;
 
       if cur == i {
-        write!(
-          stdout,
-          "{}  > {}{}",
-          style::Bold,
-          s.group.name,
-          style::Reset
-        )
-        .unwrap();
+        write!(stdout, "{}  > {}{}", style::Bold, closur(s), style::Reset)?;
       } else {
-        write!(stdout, "    {}", s.group.name).unwrap();
+        write!(stdout, "    {}", closur(s))?;
       }
     }
 
-    stdout.lock().flush().unwrap();
+    stdout.lock().flush()?;
 
     let next = input.next().ok_or_else(|| 0).unwrap();
 
@@ -156,7 +157,7 @@ fn select_group<'a>(prompt: &str, lines: &'a Vec<GroupScene<'a>>) -> &'a GroupSc
         cur += 1;
       }
       Key::Ctrl('c') => {
-        write!(stdout, "\n\r{}", cursor::Show).unwrap();
+        write!(stdout, "\n\r{}", cursor::Show)?;
         // return Err(Error::UserAborted);
       }
       _ => {
@@ -164,73 +165,9 @@ fn select_group<'a>(prompt: &str, lines: &'a Vec<GroupScene<'a>>) -> &'a GroupSc
       }
     }
   }
-  write!(stdout, "\n\r{}", cursor::Show).unwrap();
+  write!(stdout, "\n\r{}", cursor::Show)?;
 
-  lines.get(cur).unwrap()
-}
-
-// macro ?!
-fn select_scene<'a>(prompt: &str, lines: &'a Vec<&'a Scene>) -> &'a Scene {
-  let stdin = stdin();
-  let mut stdout = stdout().into_raw_mode().unwrap();
-  write!(
-    stdout,
-    "{}{}[?] {}{}\n",
-    cursor::Hide,
-    color::Fg(color::Green),
-    style::Reset,
-    prompt
-  )
-  .unwrap();
-
-  for _ in 0..lines.len() {
-    write!(stdout, "\n").unwrap();
-  }
-
-  let mut cur: usize = 0;
-
-  let mut input = stdin.keys();
-
-  loop {
-    print!("{}", cursor::Up(lines.len() as u16));
-
-    for (i, s) in lines.iter().enumerate() {
-      write!(stdout, "\n\r{}", clear::CurrentLine).unwrap();
-
-      if cur == i {
-        write!(stdout, "{}  > {}{}", style::Bold, s.name, style::Reset).unwrap();
-      } else {
-        write!(stdout, "    {}", s.name).unwrap();
-      }
-    }
-
-    stdout.lock().flush().unwrap();
-
-    let next = input.next().ok_or_else(|| 0).unwrap();
-
-    match next.unwrap() {
-      Key::Char('\n') => {
-        // Enter
-        break;
-      }
-      Key::Up if cur != 0 => {
-        cur -= 1;
-      }
-      Key::Down if cur != lines.len() - 1 => {
-        cur += 1;
-      }
-      Key::Ctrl('c') => {
-        write!(stdout, "\n\r{}", cursor::Show).unwrap();
-        // return Err(Error::UserAborted);
-      }
-      _ => {
-        // pass
-      }
-    }
-  }
-  write!(stdout, "\n\r{}", cursor::Show).unwrap();
-
-  lines.get(cur).unwrap()
+  Ok(lines.get(cur).unwrap())
 }
 
 #[derive(Debug, Clone)]
@@ -254,4 +191,12 @@ impl<'a> GroupScene<'a> {
       ..self
     }
   }
+}
+
+#[derive(Debug, Error)]
+enum ChlueError {
+  #[error(transparent)]
+  IoError(#[from] std::io::Error),
+  #[error(transparent)]
+  HuelibError(#[from] huelib::Error),
 }
