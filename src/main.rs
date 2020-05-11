@@ -1,7 +1,7 @@
 use clap::{App, Arg};
 // use huelib::resource::scene::Modifier;
 
-use huelib::resource::{light, scene, Alert, Modifier, ModifierType};
+use huelib::resource::{light, scene, Alert, Modifier, ModifierType, Scene};
 use huelib::{bridge, Bridge};
 use std::io::{self, stdin, stdout, Read, Write};
 use termion::{
@@ -44,73 +44,24 @@ fn main() {
         .help("Turn your scenes on/off"),
     )
     .get_matches();
-  // if let Some(_) = matches.value_of("list") {
   if matches.is_present("list") {
     list_group_scenes(&group_scenes);
   }
   let mut input = String::new();
   if matches.is_present("turn") {
-    for gs in &group_scenes {
-      println!("\r {}) {}", gs.group.id, gs.group.name);
-    }
-    println!("Pick a room");
-    let c = char::from(stdin.next().unwrap().unwrap());
+    let mut lines: Vec<String> = group_scenes.iter().map(|x| x.group.name.clone()).collect();
+    lines.sort();
+    let selected_group = select_group("Choose room", &group_scenes);
+    println!("SELECTED : {} ", selected_group.group.name);
 
-    if let Some(group) = group_scenes.iter().find(|&x| x.group.id == c.to_string()) {
-      // todo : create a print_scenes_for_group function
-      println!("{}", &group.group.name);
-
-      println!("{:?}", group.group.lights);
-      if let Some(scenes) = &group.scenes {
-        for i in 0..scenes.len() {
-          println!("\r > {}) {}", scenes[i].id, scenes[i].name);
-        }
-        println!("Pick a scene");
-        let mut buffer = String::new();
-        let stdin = io::stdin();
-        let mut handle = stdin.lock();
-
-        // handle.read_to_string(&mut buffer).unwrap();
-        // println!("buffer : {}", buffer);
-
-        buffer = "ZHEoPT0jtxxOTaK".to_string(); // todo : remove
-        if let Some(scene) = group
-          .scenes
-          .as_ref()
-          .unwrap()
-          .iter()
-          .find(|&&x| x.id == buffer)
-        {
-          // bridge.set_scene(scene.id, Modifier {});
-          // let modififer = huelib::resource::light::StateModifier::new().on(true);
-          // let modififer = huelib::resource::scene::LightStateModifier::new().on(true);
-          // ZHEoPT0jtxxOTaK
-
-          // let light_modifier = light::StateModifier::new()
-          //   .on(true)
-          //   .saturation(ModifierType::Override, 10)
-          //   .alert(Alert::Select)
-          //   .brightness(ModifierType::Decrement, 40);
-
-          // // Modify the attributes declared in `light_modifier` on the light with the id 1.
-          // let response = bridge.set_light_state("1", &light_modifier).unwrap();
-          // println!("{:?}", response);
-
-          // let mut modifier = scene::Modifier::new(); //.on(true);
-          //                                            // modifier.
-          // println!("{:?}", modifier);
-          // bridge
-          //   .set_scene(scene.id.clone(), &modifier)
-          //   .expect("failed to change state");
-        } else {
-          println!("No scend found with id : {}", buffer);
-        }
-      } else {
-        println!("\r > No scene detected for this room");
-      }
-    } else {
-      println!("Unknown room");
-    }
+    let select_scene = select_scene(
+      &format!("Choose scene in {}", selected_group.group.name),
+      &selected_group.scenes.as_ref().unwrap(),
+    );
+    println!(
+      "selected scene : {} -> {}",
+      select_scene.name, select_scene.id
+    );
   }
 }
 
@@ -147,7 +98,8 @@ fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
   }
 }
 
-fn select(lines: Vec<String>) {
+// macro ?!
+fn select_group<'a>(prompt: &str, lines: &'a Vec<GroupScene<'a>>) -> &'a GroupScene<'a> {
   let stdin = stdin();
   let mut stdout = stdout().into_raw_mode().unwrap();
   write!(
@@ -156,7 +108,7 @@ fn select(lines: Vec<String>) {
     cursor::Hide,
     color::Fg(color::Green),
     style::Reset,
-    "Choose 1"
+    prompt
   )
   .unwrap();
 
@@ -175,9 +127,16 @@ fn select(lines: Vec<String>) {
       write!(stdout, "\n\r{}", clear::CurrentLine).unwrap();
 
       if cur == i {
-        write!(stdout, "{}  > {}{}", style::Bold, s, style::Reset).unwrap();
+        write!(
+          stdout,
+          "{}  > {}{}",
+          style::Bold,
+          s.group.name,
+          style::Reset
+        )
+        .unwrap();
       } else {
-        write!(stdout, "    {}", s).unwrap();
+        write!(stdout, "    {}", s.group.name).unwrap();
       }
     }
 
@@ -205,7 +164,73 @@ fn select(lines: Vec<String>) {
       }
     }
   }
-  write!(stdout, "\n\r{}", cursor::Show);
+  write!(stdout, "\n\r{}", cursor::Show).unwrap();
+
+  lines.get(cur).unwrap()
+}
+
+// macro ?!
+fn select_scene<'a>(prompt: &str, lines: &'a Vec<&'a Scene>) -> &'a Scene {
+  let stdin = stdin();
+  let mut stdout = stdout().into_raw_mode().unwrap();
+  write!(
+    stdout,
+    "{}{}[?] {}{}\n",
+    cursor::Hide,
+    color::Fg(color::Green),
+    style::Reset,
+    prompt
+  )
+  .unwrap();
+
+  for _ in 0..lines.len() {
+    write!(stdout, "\n").unwrap();
+  }
+
+  let mut cur: usize = 0;
+
+  let mut input = stdin.keys();
+
+  loop {
+    print!("{}", cursor::Up(lines.len() as u16));
+
+    for (i, s) in lines.iter().enumerate() {
+      write!(stdout, "\n\r{}", clear::CurrentLine).unwrap();
+
+      if cur == i {
+        write!(stdout, "{}  > {}{}", style::Bold, s.name, style::Reset).unwrap();
+      } else {
+        write!(stdout, "    {}", s.name).unwrap();
+      }
+    }
+
+    stdout.lock().flush().unwrap();
+
+    let next = input.next().ok_or_else(|| 0).unwrap();
+
+    match next.unwrap() {
+      Key::Char('\n') => {
+        // Enter
+        break;
+      }
+      Key::Up if cur != 0 => {
+        cur -= 1;
+      }
+      Key::Down if cur != lines.len() - 1 => {
+        cur += 1;
+      }
+      Key::Ctrl('c') => {
+        write!(stdout, "\n\r{}", cursor::Show).unwrap();
+        // return Err(Error::UserAborted);
+      }
+      _ => {
+        // pass
+      }
+    }
+  }
+  write!(stdout, "\n\r{}", cursor::Show).unwrap();
+
+  lines.get(cur).unwrap()
 }
 
 #[derive(Debug, Clone)]
