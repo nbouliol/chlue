@@ -1,9 +1,11 @@
-use clap::{App, Arg};
-// use huelib::resource::scene::Modifier;
-
+use dirs;
 use huelib::resource::{light, scene, Alert, Modifier, ModifierType, Scene};
 use huelib::{bridge, Bridge};
+use std::env;
+use std::fmt::Display;
 use std::io::{self, stdin, stdout, Read, Write};
+use std::path::Path;
+
 use termion::{
   event::Key,
   input::TermRead,
@@ -17,10 +19,16 @@ type Result<T> = std::result::Result<T, ChlueError>;
 fn main() -> Result<()> {
   // Discover bridges in the local network and save the first IP address as `bridge_ip`.
   let bridge_ip = bridge::discover()?.pop().unwrap();
+
   let mut stdin = io::stdin().bytes();
   // Register a new user.
   // let user = bridge::register_user(bridge_ip, "chlue", false).unwrap();
   // todo : store user locally
+
+  if let Ok(path) = env::var("CHLUE_USER_FILE") {}
+  let user_file = dirs::home_dir().unwrap().join(".chlue_user");
+  if user_file.exists() {}
+
   let user = bridge::User {
     name: String::from("ikOhNVHbOpQHWOjkig2yPjI5E83hZheKEHn3dlQS"),
     clientkey: None,
@@ -104,9 +112,10 @@ fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
   }
 }
 
-fn select<'a, T, F>(prompt: &str, lines: &'a Vec<T>, closur: F) -> Result<&'a T>
+fn select<'a, T, F, D>(prompt: &str, lines: &'a [T], closur: F) -> Result<&'a T>
 where
-  F: Fn(&T) -> String,
+  F: Fn(&T) -> D,
+  D: Display,
 {
   let stdin = stdin();
   let mut stdout = stdout().into_raw_mode()?;
@@ -158,7 +167,7 @@ where
       }
       Key::Ctrl('c') => {
         write!(stdout, "\n\r{}", cursor::Show)?;
-        // return Err(Error::UserAborted);
+        return Err(ChlueError::UserAborted);
       }
       _ => {
         // pass
@@ -199,4 +208,11 @@ enum ChlueError {
   IoError(#[from] std::io::Error),
   #[error(transparent)]
   HuelibError(#[from] huelib::Error),
+  // #[error(transparent)]
+  // NoneError(#[from] std::option::NoneError),
+  #[error(transparent)]
+  EnvError(#[from] std::env::VarError),
+
+  #[error("Aborted by user")]
+  UserAborted,
 }
