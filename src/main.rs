@@ -1,11 +1,10 @@
-use dirs;
-use huelib::resource::{light, scene, Alert, Modifier, ModifierType, Scene};
+use huelib::resource::{group, light, Modifier};
 use huelib::{bridge, Bridge};
 use std::env;
 use std::fmt::Display;
-use std::io::{self, stdin, stdout, Read, Write};
-use std::path::Path;
-
+use std::io::{stdin, stdout, Write};
+use std::path::PathBuf;
+use structopt::StructOpt;
 use termion::{
   event::Key,
   input::TermRead,
@@ -17,63 +16,87 @@ use thiserror::Error;
 type Result<T> = std::result::Result<T, ChlueError>;
 
 fn main() -> Result<()> {
-  // Discover bridges in the local network and save the first IP address as `bridge_ip`.
   let bridge_ip = bridge::discover()?.pop().unwrap();
 
-  let mut stdin = io::stdin().bytes();
-  // Register a new user.
-  // let user = bridge::register_user(bridge_ip, "chlue", false).unwrap();
-  // todo : store user locally
+  let opt = Opt::from_args();
 
-  if let Ok(path) = env::var("CHLUE_USER_FILE") {}
-  let user_file = dirs::home_dir().unwrap().join(".chlue_user");
-  if user_file.exists() {}
+  let user: bridge::User;
 
-  let user = bridge::User {
-    name: String::from("ikOhNVHbOpQHWOjkig2yPjI5E83hZheKEHn3dlQS"),
-    clientkey: None,
-  };
+  if let Some(username) = opt.username {
+    user = bridge::User {
+      name: username,
+      clientkey: None,
+    };
+  } else {
+    user = bridge::register_user(bridge_ip, "chlue", false)?;
+    println!("User has been created. username : {}", user.name);
+  }
+
   let bridge = Bridge::new(bridge_ip, &user.name);
 
-  let scenes = bridge.get_all_scenes()?;
+  let mut scenes = bridge.get_all_scenes()?;
+  scenes.sort_by(|a, b| a.name.cmp(&b.name));
 
   let group_scenes = get_group_scene_for_user(&bridge, &scenes)?;
 
-  let matches = App::new("My Super Program")
-    .version("1.0")
-    .author("Kevin K. <kbknapp@gmail.com>")
-    .about("Does awesome things")
-    .arg(
-      Arg::with_name("list")
-        .short("l")
-        .long("list")
-        .help("List all rooms and scenes"),
-    )
-    .arg(
-      Arg::with_name("turn")
-        .short("t")
-        .help("Turn your scenes on/off"),
-    )
-    .get_matches();
-  if matches.is_present("list") {
+  if opt.list_scenes {
     list_group_scenes(&group_scenes);
+    return Ok(());
   }
 
-  if matches.is_present("turn") {
+  if opt.scene {
     let mut lines: Vec<String> = group_scenes.iter().map(|x| x.group.name.clone()).collect();
     lines.sort();
-    let selected_group = select("Choose room", &group_scenes, |x| x.group.name.to_owned())?;
+    let selected_group = select(
+      "Choose room",
+      &group_scenes,
+      |x| x.group.name.to_owned(),
+      Select::Vertical,
+    )?;
     println!("SELECTED : {} ", selected_group.group.name);
 
-    let select_scene = select(
+    let selected_scene = select(
       &format!("Choose scene in {}", selected_group.group.name),
       &selected_group.scenes.as_ref().unwrap(),
       |x| x.name.to_string(),
+      Select::Vertical,
     )?;
-    println!(
-      "selected scene : {} -> {}",
-      select_scene.name, select_scene.id
-    );
+
+    let choices = vec!["on", "off"];
+    let on = select("Set the scene", &choices, |x| x.clone(), Select::Horizontal)?;
+
+    if *on == "on" {
+      let modifier = group::StateModifier::new()
+        .scene(&selected_scene.id)
+        .on(true);
+      bridge.set_group_state(&selected_group.group.id, &modifier)?;
+    } else {
+      if let Some(lights) = &selected_scene.lights {
+        for light in lights {
+          let modifier = light::StateModifier::new().on(false);
+
+          bridge.set_light_state(light, &modifier)?;
+        }
+      }
+    }
+  }
+
+  if opt.light {
+    let mut lights = bridge.get_all_lights()?;
+    lights.sort_by(|a, b| a.name.cmp(&b.name));
+    let selected_light = select(
+      "Pick a light",
+      &lights,
+      |x| x.name.clone(),
+      Select::Vertical,
+    )?;
+
+    let choices = vec!["on", "off"];
+    let on = select("Set the light", &choices, |x| x.clone(), Select::Horizontal)?;
+
+    let modifier = light::StateModifier::new().on(*on == "on");
+
+    bridge.set_light_state(&selected_light.id, &modifier)?;
   }
 
   Ok(())
@@ -81,25 +104,26 @@ fn main() -> Result<()> {
 
 fn get_group_scene_for_user<'a>(
   bridge: &Bridge,
-  scenes: &'a Vec<huelib::resource::scene::Scene>,
+  scenes: &'a [huelib::resource::scene::Scene],
 ) -> Result<Vec<GroupScene<'a>>> {
   let mut group_scenes: Vec<GroupScene> = Vec::new();
-  let groups = bridge.get_all_groups()?;
+  let mut groups = bridge.get_all_groups()?;
+  groups.sort_by(|a, b| a.name.cmp(&b.name));
 
   for group in groups {
     let mut group_scene = GroupScene {
-      group: group,
+      group,
       scenes: None,
     };
 
-    group_scene = group_scene.add_scenes(&scenes);
+    group_scene = group_scene.add_scenes(scenes);
     group_scenes.push(group_scene);
   }
 
   Ok(group_scenes)
 }
 
-fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
+fn list_group_scenes(group_scenes: &[GroupScene<'_>]) {
   for gs in group_scenes {
     println!("{} :", gs.group.name);
     if let Some(scenes) = &gs.scenes {
@@ -112,37 +136,46 @@ fn list_group_scenes(group_scenes: &Vec<GroupScene<'_>>) {
   }
 }
 
-fn select<'a, T, F, D>(prompt: &str, lines: &'a [T], closur: F) -> Result<&'a T>
+fn select<'a, T, F, D>(prompt: &str, lines: &'a [T], closur: F, direction: Select) -> Result<&'a T>
 where
   F: Fn(&T) -> D,
   D: Display,
 {
   let stdin = stdin();
   let mut stdout = stdout().into_raw_mode()?;
+  let mut cur: usize = 0;
+  let mut len: u16 = 0;
 
-  write!(
+  writeln!(
     stdout,
-    "{}{}[?] {}{}\n",
+    "{}{}[?] {}{}",
     cursor::Hide,
     color::Fg(color::Green),
     style::Reset,
     prompt
   )?;
 
-  for _ in 0..lines.len() {
-    write!(stdout, "\n")?;
+  if direction == Select::Vertical {
+    for _ in 0..lines.len() {
+      writeln!(stdout)?;
+    }
   }
-
-  let mut cur: usize = 0;
 
   let mut input = stdin.keys();
 
   loop {
-    print!("{}", cursor::Up(lines.len() as u16));
+    if direction == Select::Vertical {
+      len = lines.len() as u16;
+    }
+    print!("{}", cursor::Up(len));
 
-    for (i, s) in lines.iter().enumerate() {
+    if direction == Select::Horizontal {
       write!(stdout, "\n\r{}", clear::CurrentLine)?;
-
+    }
+    for (i, s) in lines.iter().enumerate() {
+      if direction == Select::Vertical {
+        write!(stdout, "\n\r{}", clear::CurrentLine)?;
+      }
       if cur == i {
         write!(stdout, "{}  > {}{}", style::Bold, closur(s), style::Reset)?;
       } else {
@@ -159,10 +192,10 @@ where
         // Enter
         break;
       }
-      Key::Up if cur != 0 => {
+      Key::Up | Key::Left if cur != 0 => {
         cur -= 1;
       }
-      Key::Down if cur != lines.len() - 1 => {
+      Key::Down | Key::Right if cur != lines.len() - 1 => {
         cur += 1;
       }
       Key::Ctrl('c') => {
@@ -186,7 +219,7 @@ pub struct GroupScene<'a> {
 }
 
 impl<'a> GroupScene<'a> {
-  pub fn add_scenes(self, scenes: &'a Vec<huelib::resource::scene::Scene>) -> Self {
+  pub fn add_scenes(self, scenes: &'a [huelib::resource::scene::Scene]) -> Self {
     let s: Vec<_> = scenes
       .iter()
       .filter(|x| match &x.group {
@@ -196,23 +229,52 @@ impl<'a> GroupScene<'a> {
       .collect();
 
     GroupScene {
-      scenes: if s.len() != 0 { Some(s) } else { None },
+      scenes: if !s.is_empty() { Some(s) } else { None },
       ..self
     }
   }
+}
+
+#[derive(StructOpt, Debug)]
+#[structopt(name = env!("CARGO_PKG_NAME"), about = env!("CARGO_PKG_DESCRIPTION"))]
+struct Opt {
+  #[structopt(long, conflicts_with = "scene", conflicts_with = "light")]
+  list_scenes: bool,
+
+  #[structopt(short, long, conflicts_with = "list_scenes", conflicts_with = "light")]
+  scene: bool,
+
+  #[structopt(short, long, conflicts_with = "list_scenes", conflicts_with = "scene")]
+  light: bool,
+
+  #[structopt(short = "f", long)]
+  user_file: Option<PathBuf>,
+
+  #[structopt(
+    short,
+    long,
+    help = "bridge username, if not supplied you have to click on the bridge and a new user will be created"
+  )]
+  username: Option<String>,
 }
 
 #[derive(Debug, Error)]
 enum ChlueError {
   #[error(transparent)]
   IoError(#[from] std::io::Error),
+
   #[error(transparent)]
   HuelibError(#[from] huelib::Error),
-  // #[error(transparent)]
-  // NoneError(#[from] std::option::NoneError),
+
   #[error(transparent)]
   EnvError(#[from] std::env::VarError),
 
   #[error("Aborted by user")]
   UserAborted,
+}
+
+#[derive(PartialEq, Debug)]
+enum Select {
+  Vertical,
+  Horizontal,
 }
