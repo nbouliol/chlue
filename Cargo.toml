@@ -3,6 +3,7 @@ name = "chlue"
 version = "0.1.0"
 authors = ["Nicolas Bouliol <cheuveux@gmail.com>"]
 edition = "2018"
+description = "Basic commands for Philips hue from the command line"
 
 [dependencies]
 huelib = "0.6.0"

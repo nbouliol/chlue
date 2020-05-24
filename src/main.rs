@@ -3,7 +3,6 @@ use huelib::{bridge, Bridge};
 use std::env;
 use std::fmt::Display;
 use std::io::{stdin, stdout, Write};
-use std::path::PathBuf;
 use structopt::StructOpt;
 use termion::{
   event::Key,
@@ -70,13 +69,11 @@ fn main() -> Result<()> {
         .scene(&selected_scene.id)
         .on(true);
       bridge.set_group_state(&selected_group.group.id, &modifier)?;
-    } else {
-      if let Some(lights) = &selected_scene.lights {
-        for light in lights {
-          let modifier = light::StateModifier::new().on(false);
+    } else if let Some(lights) = &selected_scene.lights {
+      for light in lights {
+        let modifier = light::StateModifier::new().on(false);
 
-          bridge.set_light_state(light, &modifier)?;
-        }
+        bridge.set_light_state(light, &modifier)?;
       }
     }
   }
@@ -238,22 +235,36 @@ impl<'a> GroupScene<'a> {
 #[derive(StructOpt, Debug)]
 #[structopt(name = env!("CARGO_PKG_NAME"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Opt {
-  #[structopt(long, conflicts_with = "scene", conflicts_with = "light")]
+  #[structopt(
+    long,
+    conflicts_with = "scene",
+    conflicts_with = "light",
+    help = "prints all the scenes by group"
+  )]
   list_scenes: bool,
-
-  #[structopt(short, long, conflicts_with = "list_scenes", conflicts_with = "light")]
-  scene: bool,
-
-  #[structopt(short, long, conflicts_with = "list_scenes", conflicts_with = "scene")]
-  light: bool,
-
-  #[structopt(short = "f", long)]
-  user_file: Option<PathBuf>,
 
   #[structopt(
     short,
     long,
-    help = "bridge username, if not supplied you have to click on the bridge and a new user will be created"
+    conflicts_with = "list_scenes",
+    conflicts_with = "light",
+    help = "turn a scene on / off"
+  )]
+  scene: bool,
+
+  #[structopt(
+    short,
+    long,
+    conflicts_with = "list_scenes",
+    conflicts_with = "scene",
+    help = "turn a light on / off"
+  )]
+  light: bool,
+
+  #[structopt(
+    short,
+    long,
+    help = "bridge username, if not supplied you have to click on the bridge and a new user will be created and outputed"
   )]
   username: Option<String>,
 }
